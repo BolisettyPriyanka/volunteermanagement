@@ -1,0 +1,8 @@
+fastapi~=0.115.11
+uvicorn
+
+gspread~=6.2.0
+google~=3.0.0
+protobuf~=4.25.3
+pydantic~=2.8.2
+google-api-python-client~=2.166.0
