@@ -47,10 +47,15 @@ def is_valid_phone(client: gspread.Client, phone: str) -> bool:
     :param phone:
     :return:
     """
+    print(f"inside is_valid_phone")
     spreadsheet = client.open("SSDVolunteers").sheet1
     volunteers = spreadsheet.get_all_records()
+    print(f"{len(volunteers)}")
     for volunteer in volunteers:
-        if phone == volunteer['Mobile']:
+        print(volunteer['Mobile'])
+        clean_phone = str(volunteer['Mobile']).replace("+", "")
+        clean_phone_from_user = phone.replace("+", "")
+        if clean_phone_from_user == clean_phone:
             print(f"volunteer: {volunteer}")
             print(f"found phone match: {phone}")
             return True
@@ -101,14 +106,29 @@ def get_shifts(client: gspread.Client, phone_number: Optional[str] = None) -> li
 
     print(f"Found {len(shifts)} shifts")
     shifts_list = []
+
     for shift in shifts:
-        phone_numbers = shift["Volunteers"].split(", ")
-        for phone in phone_numbers:
-            if phone == phone_number:
-                print(f"shift match found: {shift}")
-                shifts_list.append(shift)
-    print(f"Found matching shifts: {shifts_list}    ")
+        if phone_number and is_phone_in_shift(shift, phone_number):
+            print(f"shift match found: {shift}")
+            shifts_list.append(shift)
+            print(f"Found matching shifts: {shifts_list}")
+
     return shifts_list
+
+
+def is_phone_in_shift(shift: dict, phone_number: str) -> bool:
+    volunteers = shift.get("Volunteers")
+
+    # Handle integer type (single phone number)
+    if isinstance(volunteers, int):
+        return str(volunteers) == phone_number
+
+    # Handle string/list-like type
+    if isinstance(volunteers, str):
+        phone_numbers = [v.strip().replace("+", "") for v in volunteers.split(",") if v.strip()]
+        return phone_number in phone_numbers
+
+    return False
 
 
 @shift_router.post("/shifts/add",
@@ -148,10 +168,11 @@ def get_shifts_by_phone_number(phone: str):
 
 
 def get_available_shifts(phone: str):
-    print(f"phone: {phone}")
-
     # Authenticate the sheet
     request_client = authenticate_google_sheets()
+
+    # Normalize the phone number
+    phone = "+" + phone
 
     if not is_valid_phone(request_client, phone):
         raise HTTPException(status_code=400, detail="phone number is invalid")
@@ -160,8 +181,7 @@ def get_available_shifts(phone: str):
     available_shifts = []
 
     for shift in shifts:
-        if phone not in shift["Volunteers"] and shift["Is Available"] == "Yes":
-            print(f"shift: {shift}")
+        if not is_phone_in_shift(shift, phone):
             available_shifts.append(shift)
     return available_shifts
 
@@ -170,26 +190,30 @@ def delete_phone_number_from_row(sheet, shift_column, phone_number):
     # Get all rows from the sheet
     rows = sheet.get_all_values()
 
+    # Normalize the phone number
+    phone_number = "+" + phone_number
+
     # Iterate through rows to find the shift containing the phone number
     for i, row in enumerate(rows):
         # Assume the shift info is in the first column and phone numbers in the specified shift column
-        shift_column_data = row[3]
+        shift_column_data = row[4]
         print(f"shift_column_data : {shift_column_data}")
 
         # Split the phone numbers by a delimiter (assuming they are comma-separated)
         shift_column_data.replace(" ", "")
         phone_numbers = shift_column_data.split(',')
+        stripped_list = [phone.strip() for phone in phone_numbers]
 
-        if phone_number in phone_numbers:
+        if phone_number in stripped_list:
             # Remove the phone number
-            phone_numbers.remove(phone_number)
+            stripped_list.remove(phone_number)
 
             # Update the row with the new list of phone numbers
-            sheet.update_cell(i + 1, shift_column + 1, ','.join(phone_numbers))  # +1 because gspread is 1-indexed
+            sheet.update_cell(i + 1, shift_column + 1, ','.join(stripped_list))  # +1 because gspread is 1-indexed
             print(f"Removed {phone_number} from shift {i + 1}.")
             break
-    else:
-        print(f"Phone number {phone_number} not found in any shifts.")
+        else:
+            print(f"Phone number {phone_number} not found in any shifts.")
 
 
 @shift_router.delete("/shifts/{phone_no}")
@@ -207,11 +231,9 @@ async def cancel_shift(phone_no: str):
 
     for shift in shifts:
         if phone_no in shift["Volunteers"]:
-            delete_phone_number_from_row(spreadsheet.worksheet("shifts"), 3, phone_no)
+            delete_phone_number_from_row(spreadsheet.worksheet("shifts"), 4, phone_no)
 
 
-"""
-APIs
 @shift_router.get("/shifts/{phone}",
          responses={200: {"description": "Found shifts"}, 400: {"description": "Bad request"}},
          summary="Get shifts using phone number",
@@ -228,16 +250,18 @@ async def get_shifts_by_email_or_phone_number(phone: str):
     return get_shifts(request_client, phone)
 
 
-
 @shift_router.get("/availableshifts/{phone}",
                   responses={200: {"description": "Get all available shifts"}, 400: {"description": "Bad request"}},
                   summary="Get all available shifts",
                   response_model=list[dict[str, int | float | str]])
-async def get_available_shifts(phone: Optional[str] = None):
+async def get_available_shifts_for_me(phone: Optional[str] = None):
     print(f"phone: {phone}")
 
     # Authenticate the sheet
     request_client = authenticate_google_sheets()
+
+    # Normalize the phone number
+    phone = "+" + phone
 
     if not is_valid_phone(request_client, phone):
         raise HTTPException(status_code=400, detail="phone number is invalid")
@@ -246,11 +270,6 @@ async def get_available_shifts(phone: Optional[str] = None):
     available_shifts = []
 
     for shift in shifts:
-        if phone not in shift["Volunteers"] and shift["Is Available"] == "Yes":
+        if not is_phone_in_shift(shift, phone):
             available_shifts.append(shift)
     return available_shifts
-
-"""
-
-
-
